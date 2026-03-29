@@ -16,8 +16,10 @@ function formatTime(value) {
 export default function ChatIndex({ users, selectedUser, messages }) {
     const authUser = usePage().props.auth.user;
     const [messageItems, setMessageItems] = useState(messages);
+    const [chatUsers, setChatUsers] = useState(users);
+    const [isSending, setIsSending] = useState(false);
 
-    const { data, setData, post, transform, processing, reset, errors } = useForm({
+    const { data, setData, setError, clearErrors, reset, errors } = useForm({
         message: '',
     });
 
@@ -26,7 +28,11 @@ export default function ChatIndex({ users, selectedUser, messages }) {
     }, [messages]);
 
     useEffect(() => {
-        if (!selectedUser || !window.Echo) {
+        setChatUsers(users);
+    }, [users]);
+
+    useEffect(() => {
+        if (!window.Echo) {
             return;
         }
 
@@ -38,6 +44,39 @@ export default function ChatIndex({ users, selectedUser, messages }) {
             const incomingMessage = event?.message;
 
             if (!incomingMessage?.id) {
+                return;
+            }
+
+            setChatUsers((previousUsers) => {
+                const updatedUsers = previousUsers.map((item) => {
+                    const isMessageForUser =
+                        item.id === incomingMessage.sender_id ||
+                        item.id === incomingMessage.receiver_id;
+
+                    if (!isMessageForUser || item.id === authUser.id) {
+                        return item;
+                    }
+
+                    return {
+                        ...item,
+                        last_message: incomingMessage.message,
+                        last_message_at: incomingMessage.created_at,
+                    };
+                });
+
+                return [...updatedUsers].sort((a, b) => {
+                    const aTs = a.last_message_at
+                        ? new Date(a.last_message_at).getTime()
+                        : 0;
+                    const bTs = b.last_message_at
+                        ? new Date(b.last_message_at).getTime()
+                        : 0;
+
+                    return bTs - aTs;
+                });
+            });
+
+            if (!selectedUser) {
                 return;
             }
 
@@ -66,20 +105,42 @@ export default function ChatIndex({ users, selectedUser, messages }) {
         };
     }, [authUser.id, selectedUser?.id]);
 
-    const submit = (event) => {
+    const submit = async (event) => {
         event.preventDefault();
 
-        if (!selectedUser) {
+        const trimmedMessage = data.message.trim();
+
+        if (!selectedUser || !trimmedMessage || isSending) {
             return;
         }
 
-        transform((formData) => ({
-            ...formData,
-            receiver_id: selectedUser.id,
-        })).post(route('chat.messages.store'), {
-            preserveScroll: true,
-            onSuccess: () => reset('message'),
-        });
+        setIsSending(true);
+        clearErrors();
+
+        try {
+            await window.axios.post(
+                route('chat.messages.store'),
+                {
+                    receiver_id: selectedUser.id,
+                    message: trimmedMessage,
+                },
+                {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                },
+            );
+
+            reset('message');
+        } catch (error) {
+            const validationMessage =
+                error?.response?.data?.errors?.message?.[0] ??
+                'Unable to send message.';
+
+            setError('message', validationMessage);
+        } finally {
+            setIsSending(false);
+        }
     };
 
     return (
@@ -103,7 +164,7 @@ export default function ChatIndex({ users, selectedUser, messages }) {
                             </div>
 
                             <div className="divide-y">
-                                {users.map((user) => (
+                                {chatUsers.map((user) => (
                                     <Link
                                         key={user.id}
                                         href={route('chat.index', {
@@ -208,18 +269,19 @@ export default function ChatIndex({ users, selectedUser, messages }) {
                                                 : 'Select a user first'
                                         }
                                         className="w-full rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                        disabled={!selectedUser || processing}
+                                        disabled={!selectedUser || isSending}
+                                        autoComplete="off"
                                     />
                                     <button
                                         type="submit"
                                         className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                                         disabled={
                                             !selectedUser ||
-                                            processing ||
+                                            isSending ||
                                             !data.message.trim()
                                         }
                                     >
-                                        Send
+                                        {isSending ? 'Sending...' : 'Send'}
                                     </button>
                                 </div>
 

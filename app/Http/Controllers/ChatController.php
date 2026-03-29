@@ -6,6 +6,7 @@ use App\Events\MessageSent;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -80,7 +81,7 @@ class ChatController extends Controller
         ]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(Request $request): JsonResponse|RedirectResponse
     {
         $authUser = $request->user();
 
@@ -112,6 +113,19 @@ class ChatController extends Controller
         ]);
 
         MessageSent::dispatch($message);
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => [
+                    'id' => $message->id,
+                    'message' => $message->message,
+                    'sender_id' => $message->sender_id,
+                    'receiver_id' => $message->receiver_id,
+                    'sender_name' => $message->sender?->name,
+                    'created_at' => $message->created_at?->toISOString(),
+                ],
+            ]);
+        }
 
         return redirect()->route('chat.index', [
             'user_id' => $validated['receiver_id'],

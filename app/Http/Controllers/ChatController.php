@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\MessageSent;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\User;
@@ -16,11 +17,43 @@ class ChatController extends Controller
     {
         $authUser = $request->user();
 
-        $users = User::query()
+        $baseUsers = User::query()
             ->whereKeyNot($authUser->id)
             ->select('id', 'name', 'email')
             ->orderBy('name')
             ->get();
+
+        $conversations = Conversation::query()
+            ->with('lastMessage:id,message,created_at')
+            ->where('user_id1', $authUser->id)
+            ->orWhere('user_id2', $authUser->id)
+            ->get();
+
+        $users = $baseUsers
+            ->map(function (User $user) use ($authUser, $conversations) {
+                $conversation = $conversations->first(function (Conversation $conversation) use ($authUser, $user) {
+                    return ($conversation->user_id1 === $authUser->id && $conversation->user_id2 === $user->id)
+                        || ($conversation->user_id2 === $authUser->id && $conversation->user_id1 === $user->id);
+                });
+
+                $lastMessageAt = $conversation?->lastMessage?->created_at;
+
+                return [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'last_message' => $conversation?->lastMessage?->message,
+                    'last_message_at' => $lastMessageAt?->toISOString(),
+                    'sort_timestamp' => $lastMessageAt?->getTimestamp() ?? 0,
+                ];
+            })
+            ->sortByDesc('sort_timestamp')
+            ->values()
+            ->map(function (array $user) {
+                unset($user['sort_timestamp']);
+
+                return $user;
+            });
 
         $selectedUserId = $request->integer('user_id');
         $selectedUser = null;
@@ -33,32 +66,10 @@ class ChatController extends Controller
                 abort(404);
             }
 
-            $conversation = Conversation::query()
-                ->where(function ($query) use ($authUser, $selectedUserId) {
-                    $query
-                        ->where('user_id1', $authUser->id)
-                        ->where('user_id2', $selectedUserId);
-                })
-                ->orWhere(function ($query) use ($authUser, $selectedUserId) {
-                    $query
-                        ->where('user_id1', $selectedUserId)
-                        ->where('user_id2', $authUser->id);
-                })
-                ->first();
+            $conversation = $this->findConversationForUsers($authUser->id, $selectedUserId);
 
             if ($conversation) {
-                $messages = Message::query()
-                    ->where('conversation_id', $conversation->id)
-                    ->with(['sender:id,name'])
-                    ->orderBy('id')
-                    ->get()
-                    ->map(fn (Message $message) => [
-                        'id' => $message->id,
-                        'message' => $message->message,
-                        'sender_id' => $message->sender_id,
-                        'sender_name' => $message->sender?->name,
-                        'created_at' => $message->created_at?->toISOString(),
-                    ]);
+                $messages = $this->getConversationMessages($conversation->id);
             }
         }
 
@@ -78,18 +89,7 @@ class ChatController extends Controller
             'message' => ['required', 'string', 'max:5000'],
         ]);
 
-        $conversation = Conversation::query()
-            ->where(function ($query) use ($authUser, $validated) {
-                $query
-                    ->where('user_id1', $authUser->id)
-                    ->where('user_id2', $validated['receiver_id']);
-            })
-            ->orWhere(function ($query) use ($authUser, $validated) {
-                $query
-                    ->where('user_id1', $validated['receiver_id'])
-                    ->where('user_id2', $authUser->id);
-            })
-            ->first();
+        $conversation = $this->findConversationForUsers($authUser->id, $validated['receiver_id']);
 
         if (! $conversation) {
             $conversation = Conversation::create([
@@ -105,12 +105,48 @@ class ChatController extends Controller
             'conversation_id' => $conversation->id,
         ]);
 
+        $message->load('sender:id,name');
+
         $conversation->update([
             'last_message_id' => $message->id,
         ]);
 
+        MessageSent::dispatch($message);
+
         return redirect()->route('chat.index', [
             'user_id' => $validated['receiver_id'],
         ]);
+    }
+
+    private function findConversationForUsers(int $firstUserId, int $secondUserId): ?Conversation
+    {
+        return Conversation::query()
+            ->where(function ($query) use ($firstUserId, $secondUserId) {
+                $query
+                    ->where('user_id1', $firstUserId)
+                    ->where('user_id2', $secondUserId);
+            })
+            ->orWhere(function ($query) use ($firstUserId, $secondUserId) {
+                $query
+                    ->where('user_id1', $secondUserId)
+                    ->where('user_id2', $firstUserId);
+            })
+            ->first();
+    }
+
+    private function getConversationMessages(int $conversationId)
+    {
+        return Message::query()
+            ->where('conversation_id', $conversationId)
+            ->with(['sender:id,name'])
+            ->orderBy('id')
+            ->get()
+            ->map(fn (Message $message) => [
+                'id' => $message->id,
+                'message' => $message->message,
+                'sender_id' => $message->sender_id,
+                'sender_name' => $message->sender?->name,
+                'created_at' => $message->created_at?->toISOString(),
+            ]);
     }
 }

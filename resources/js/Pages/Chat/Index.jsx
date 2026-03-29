@@ -1,5 +1,6 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
+import { useEffect, useState } from 'react';
 
 function formatTime(value) {
     if (!value) {
@@ -14,10 +15,56 @@ function formatTime(value) {
 
 export default function ChatIndex({ users, selectedUser, messages }) {
     const authUser = usePage().props.auth.user;
+    const [messageItems, setMessageItems] = useState(messages);
 
     const { data, setData, post, transform, processing, reset, errors } = useForm({
         message: '',
     });
+
+    useEffect(() => {
+        setMessageItems(messages);
+    }, [messages]);
+
+    useEffect(() => {
+        if (!selectedUser || !window.Echo) {
+            return;
+        }
+
+        const channelName = `chat.user.${authUser.id}`;
+
+        const channel = window.Echo.private(channelName);
+
+        channel.listen('.message.sent', (event) => {
+            const incomingMessage = event?.message;
+
+            if (!incomingMessage?.id) {
+                return;
+            }
+
+            const belongsToOpenConversation =
+                (incomingMessage.sender_id === selectedUser.id &&
+                    incomingMessage.receiver_id === authUser.id) ||
+                (incomingMessage.sender_id === authUser.id &&
+                    incomingMessage.receiver_id === selectedUser.id);
+
+            if (!belongsToOpenConversation) {
+                return;
+            }
+
+            setMessageItems((previousMessages) => {
+                if (previousMessages.some((item) => item.id === incomingMessage.id)) {
+                    return previousMessages;
+                }
+
+                return [...previousMessages, incomingMessage];
+            });
+        });
+
+        return () => {
+            channel.stopListening('.message.sent');
+            window.Echo.leave(channelName);
+        };
+    }, [authUser.id, selectedUser?.id]);
 
     const submit = (event) => {
         event.preventDefault();
@@ -74,6 +121,11 @@ export default function ChatIndex({ users, selectedUser, messages }) {
                                         <p className="text-sm text-gray-500">
                                             {user.email}
                                         </p>
+                                        {user.last_message && (
+                                            <p className="mt-1 truncate text-xs text-gray-500">
+                                                {user.last_message}
+                                            </p>
+                                        )}
                                     </Link>
                                 ))}
                             </div>
@@ -95,13 +147,13 @@ export default function ChatIndex({ users, selectedUser, messages }) {
                                     </p>
                                 )}
 
-                                {selectedUser && messages.length === 0 && (
+                                {selectedUser && messageItems.length === 0 && (
                                     <p className="text-sm text-gray-500">
                                         No messages yet.
                                     </p>
                                 )}
 
-                                {messages.map((message) => {
+                                {messageItems.map((message) => {
                                     const isMine = message.sender_id === authUser.id;
 
                                     return (

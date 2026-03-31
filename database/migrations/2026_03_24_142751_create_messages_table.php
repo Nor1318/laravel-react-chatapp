@@ -35,6 +35,14 @@ return new class extends Migration
      */
     public function down(): void
     {
+        Schema::table('groups', function (Blueprint $table) {
+            $table->dropConstrainedForeignId('last_message_id');
+        });
+
+        Schema::table('conversations', function (Blueprint $table) {
+            $table->dropConstrainedForeignId('last_message_id');
+        });
+
         Schema::dropIfExists('messages');
     }
 };

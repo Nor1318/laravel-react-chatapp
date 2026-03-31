@@ -6,9 +6,11 @@ use App\Events\MessageSent;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -26,8 +28,11 @@ class ChatController extends Controller
 
         $conversations = Conversation::query()
             ->with('lastMessage:id,message,created_at')
-            ->where('user_id1', $authUser->id)
-            ->orWhere('user_id2', $authUser->id)
+            ->where(function ($query) use ($authUser) {
+                $query
+                    ->where('user_id1', $authUser->id)
+                    ->orWhere('user_id2', $authUser->id);
+            })
             ->get();
 
         $users = $baseUsers
@@ -84,23 +89,41 @@ class ChatController extends Controller
     public function store(Request $request): JsonResponse|RedirectResponse
     {
         $authUser = $request->user();
+        $trimmedMessage = trim((string) $request->input('message', ''));
 
         $validated = $request->validate([
             'receiver_id' => ['required', 'integer', 'exists:users,id', 'not_in:'.$authUser->id],
             'message' => ['required', 'string', 'max:5000'],
+        ], [
+            'message.required' => 'Message cannot be empty.',
         ]);
 
-        $conversation = $this->findConversationForUsers($authUser->id, $validated['receiver_id']);
-
-        if (! $conversation) {
-            $conversation = Conversation::create([
-                'user_id1' => min($authUser->id, $validated['receiver_id']),
-                'user_id2' => max($authUser->id, $validated['receiver_id']),
+        if ($trimmedMessage === '') {
+            throw ValidationException::withMessages([
+                'message' => ['Message cannot be empty.'],
             ]);
         }
 
+        [$firstUserId, $secondUserId] = $this->normalizeConversationUserIds(
+            $authUser->id,
+            (int) $validated['receiver_id'],
+        );
+
+        $conversation = $this->findConversationForUsers($firstUserId, $secondUserId);
+
+        if (! $conversation) {
+            try {
+                $conversation = Conversation::create([
+                    'user_id1' => $firstUserId,
+                    'user_id2' => $secondUserId,
+                ]);
+            } catch (QueryException) {
+                $conversation = $this->findConversationForUsers($firstUserId, $secondUserId);
+            }
+        }
+
         $message = Message::create([
-            'message' => trim($validated['message']),
+            'message' => $trimmedMessage,
             'sender_id' => $authUser->id,
             'receiver_id' => $validated['receiver_id'],
             'conversation_id' => $conversation->id,
@@ -135,17 +158,17 @@ class ChatController extends Controller
     private function findConversationForUsers(int $firstUserId, int $secondUserId): ?Conversation
     {
         return Conversation::query()
-            ->where(function ($query) use ($firstUserId, $secondUserId) {
-                $query
-                    ->where('user_id1', $firstUserId)
-                    ->where('user_id2', $secondUserId);
-            })
-            ->orWhere(function ($query) use ($firstUserId, $secondUserId) {
-                $query
-                    ->where('user_id1', $secondUserId)
-                    ->where('user_id2', $firstUserId);
-            })
+            ->where('user_id1', $firstUserId)
+            ->where('user_id2', $secondUserId)
             ->first();
+    }
+
+    private function normalizeConversationUserIds(int $firstUserId, int $secondUserId): array
+    {
+        return [
+            min($firstUserId, $secondUserId),
+            max($firstUserId, $secondUserId),
+        ];
     }
 
     private function getConversationMessages(int $conversationId)
@@ -159,6 +182,7 @@ class ChatController extends Controller
                 'id' => $message->id,
                 'message' => $message->message,
                 'sender_id' => $message->sender_id,
+                'receiver_id' => $message->receiver_id,
                 'sender_name' => $message->sender?->name,
                 'created_at' => $message->created_at?->toISOString(),
             ]);

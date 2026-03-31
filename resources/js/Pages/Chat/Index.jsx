@@ -118,7 +118,7 @@ export default function ChatIndex({ users, selectedUser, messages }) {
         clearErrors();
 
         try {
-            await window.axios.post(
+            const response = await window.axios.post(
                 route('chat.messages.store'),
                 {
                     receiver_id: selectedUser.id,
@@ -130,6 +130,43 @@ export default function ChatIndex({ users, selectedUser, messages }) {
                     },
                 },
             );
+
+            const outgoingMessage = response?.data?.message;
+
+            if (outgoingMessage?.id) {
+                setMessageItems((previousMessages) => {
+                    if (previousMessages.some((item) => item.id === outgoingMessage.id)) {
+                        return previousMessages;
+                    }
+
+                    return [...previousMessages, outgoingMessage];
+                });
+
+                setChatUsers((previousUsers) => {
+                    const updatedUsers = previousUsers.map((item) => {
+                        if (item.id !== selectedUser.id) {
+                            return item;
+                        }
+
+                        return {
+                            ...item,
+                            last_message: outgoingMessage.message,
+                            last_message_at: outgoingMessage.created_at,
+                        };
+                    });
+
+                    return [...updatedUsers].sort((a, b) => {
+                        const aTs = a.last_message_at
+                            ? new Date(a.last_message_at).getTime()
+                            : 0;
+                        const bTs = b.last_message_at
+                            ? new Date(b.last_message_at).getTime()
+                            : 0;
+
+                        return bTs - aTs;
+                    });
+                });
+            }
 
             reset('message');
         } catch (error) {

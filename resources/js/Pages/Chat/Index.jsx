@@ -229,7 +229,7 @@ export default function ChatIndex({ users, selectedUser, messages }) {
                             </div>
                         </aside>
 
-                        <section className="flex flex-col overflow-hidden rounded-lg bg-white shadow-sm lg:col-span-2">
+                        <section className="flex flex-col overflow-hidden rounded-lg bg-white shadow-sm lg:col-span-2 h-[70vh]">
                             <div className="border-b px-4 py-3">
                                 <h3 className="font-semibold text-gray-900">
                                     {selectedUser

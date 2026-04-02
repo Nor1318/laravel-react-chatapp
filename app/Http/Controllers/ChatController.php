@@ -72,7 +72,12 @@ class ChatController extends Controller
                 abort(404);
             }
 
-            $conversation = $this->findConversationForUsers($authUser->id, $selectedUserId);
+            [$firstUserId, $secondUserId] = $this->normalizeConversationUserIds(
+                $authUser->id,
+                $selectedUserId,
+            );
+
+            $conversation = $this->findConversationForUsers($firstUserId, $secondUserId);
 
             if ($conversation) {
                 $messages = $this->getConversationMessages($conversation->id);
